@@ -25,6 +25,15 @@ export function useTemplates() {
   return useQuery({ queryKey: ["templates"], queryFn: api.listTemplates });
 }
 
+export function useRuns(campaignId: string | null, active = false) {
+  return useQuery({
+    queryKey: ["campaigns", campaignId ?? "none", "runs"],
+    queryFn: () => api.listRuns(campaignId!),
+    enabled: Boolean(campaignId),
+    refetchInterval: active ? 1000 : false,
+  });
+}
+
 export function useCampaignActions() {
   const client = useQueryClient();
   const refreshCampaign = async (campaignId: string) => {

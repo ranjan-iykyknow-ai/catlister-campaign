@@ -184,7 +184,7 @@ class SendAccepted(Contract):
     run_id: str
     campaign_id: str
     status: RunStatus
-    provider: Literal["fake", "ses"]
+    provider: Literal["fake", "resend"]
     status_url: str
 
 

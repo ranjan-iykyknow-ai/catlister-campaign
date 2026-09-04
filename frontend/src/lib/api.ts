@@ -86,6 +86,8 @@ export const sendCampaign = (campaignId: string) =>
   request<SendCampaignResponse>(`/v1/campaigns/${campaignId}/send`, json("POST"));
 export const getRun = (campaignId: string, runId: string) =>
   request<CampaignRun>(`/v1/campaigns/${campaignId}/runs/${runId}`);
+export const listRuns = (campaignId: string) =>
+  request<Collection<CampaignRun>>(`/v1/campaigns/${campaignId}/runs`);
 export const getSession = () => request<AuthSession>("/v1/auth/session");
 export const login = (password: string) => request<AuthSession>("/v1/auth/session", json("POST", { password }));
 export const logout = () => request<AuthSession>("/v1/auth/session", json("DELETE"));

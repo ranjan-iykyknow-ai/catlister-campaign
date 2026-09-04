@@ -116,3 +116,20 @@ async def test_shared_password_protects_deployed_api(monkeypatch) -> None:
         assert signed_in.status_code == 200
         assert signed_in.json()["authenticated"] is True
         assert (await api.get("/v1/campaigns")).status_code == 200
+
+
+async def test_send_acceptance_contract_supports_resend(monkeypatch) -> None:
+    async def no_dispatch(_run_id: str) -> None:
+        return None
+
+    monkeypatch.setenv("EMAIL_PROVIDER", "resend")
+    monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setenv("RESEND_DEMO_RECIPIENT", "owner@example.com")
+    monkeypatch.setattr(campaign_service, "dispatch", no_dispatch)
+
+    async with client() as api:
+        response = await api.post("/v1/campaigns/campaign_1/send")
+
+    assert response.status_code == 202
+    assert response.json()["provider"] == "resend"
+    assert response.json()["status"] == "pending"

@@ -6,10 +6,11 @@ import {
   useCampaign,
   useCampaignActions,
   useCampaigns,
+  useRuns,
   useTemplateActions,
   useTemplates,
 } from "@/lib/data/use-campaign";
-import type { Contact, DeliveryOutcome, MessageTemplate, OutcomeStatus } from "@/types/api";
+import type { CampaignRun, Contact, MessageTemplate, OutcomeStatus } from "@/types/api";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -114,6 +115,7 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
   const actions = useCampaignActions();
   const templateActions = useTemplateActions();
   const campaign = campaignQuery.data;
+  const runs = useRuns(campaignId, campaign?.active_run ?? false);
   const [showCampaignEdit, setShowCampaignEdit] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -272,7 +274,7 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
         </div>
       </section>
 
-      {campaign.latest_run ? <ResultsPanel outcomes={campaign.latest_run.outcomes} status={campaign.latest_run.status} /> : null}
+      <DeliveryHistory error={runs.error} loading={runs.isLoading} runs={runs.data?.items ?? []} />
     </main>
   );
 }
@@ -309,17 +311,74 @@ const statusTone: Record<OutcomeStatus, "neutral" | "success" | "warning" | "dan
   unknown: "danger", not_attempted: "neutral",
 };
 
-function ResultsPanel({ outcomes, status }: { outcomes: DeliveryOutcome[]; status: string }) {
+function runTone(status: CampaignRun["status"]): "neutral" | "success" | "warning" | "danger" {
+  if (status === "completed") return "success";
+  if (status === "pending" || status === "running") return "warning";
+  return "danger";
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "In progress";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function DeliveryHistory({ runs, loading, error }: { runs: CampaignRun[]; loading: boolean; error: unknown }) {
   return (
-    <section className="panel results-panel" aria-labelledby="results-heading">
-      <div className="panel-heading"><h2 id="results-heading">Latest delivery</h2><StatusPill tone={status === "completed" ? "success" : status === "running" || status === "pending" ? "warning" : "danger"}>{status.replaceAll("_", " ")}</StatusPill></div>
-      <div className="result-summary">
-        {(["sent", "skipped", "failed", "unknown"] as OutcomeStatus[]).map((key) => <div key={key}><strong>{outcomes.filter((item) => item.status === key).length}</strong><span>{key.replaceAll("_", " ")}</span></div>)}
+    <section className="panel delivery-history" aria-labelledby="delivery-history-heading">
+      <div className="panel-heading">
+        <div><h2 id="delivery-history-heading">Email operations</h2><small>Latest run first · expand a run to inspect every recipient</small></div>
+        <span className="contact-count">{runs.length} run{runs.length === 1 ? "" : "s"}</span>
       </div>
-      <div className="contact-list">
-        {outcomes.map((outcome) => <article className="contact-row" key={outcome.id}><div className="contact-identity"><strong>{outcome.first_name}</strong><span>{outcome.email}{outcome.error_message ? ` · ${outcome.error_message}` : ""}</span></div><StatusPill tone={statusTone[outcome.status]}>{outcome.status === "sent" && outcome.provider_message_id ? "Accepted" : outcome.status.replaceAll("_", " ")}</StatusPill></article>)}
+      <InlineError error={error} />
+      {loading ? <p className="empty-state compact">Loading delivery history…</p> : null}
+      <div className="run-list">
+        {runs.map((run, index) => <RunDisclosure key={run.id} latest={index === 0} run={run} />)}
       </div>
+      {!loading && runs.length === 0 ? <p className="empty-state compact">No email operations yet.</p> : null}
     </section>
+  );
+}
+
+function RunDisclosure({ run, latest }: { run: CampaignRun; latest: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const failed = run.counts.failed + run.counts.unknown + run.counts.not_attempted;
+  return (
+    <article className={`run-card${latest ? " run-card--latest" : ""}`}>
+      <button aria-expanded={expanded} className="run-toggle" onClick={() => setExpanded((value) => !value)} type="button">
+        <div className="run-identity">
+          <strong>{latest ? "Latest delivery" : "Previous delivery"}</strong>
+          <span>{formatDateTime(run.completed_at ?? run.started_at ?? run.created_at)}</span>
+        </div>
+        <div className="run-stats" aria-label="Delivery summary">
+          <span><strong>{run.counts.sent}</strong> sent</span>
+          <span><strong>{run.counts.skipped}</strong> skipped</span>
+          <span><strong>{failed}</strong> failed</span>
+        </div>
+        <StatusPill tone={runTone(run.status)}>{run.status.replaceAll("_", " ")}</StatusPill>
+        <span className="disclosure-icon" aria-hidden="true">{expanded ? "−" : "+"}</span>
+      </button>
+      {expanded ? (
+        <div className="outcome-table-wrap">
+          <table className="outcome-table">
+            <thead><tr><th>Contact</th><th>Email</th><th>Result</th><th>Completed</th><th>Details</th></tr></thead>
+            <tbody>
+              {run.outcomes.map((outcome) => (
+                <tr key={outcome.id}>
+                  <td>{outcome.first_name}</td>
+                  <td>{outcome.email}</td>
+                  <td><StatusPill tone={statusTone[outcome.status]}>{outcome.status === "sent" ? "Accepted" : outcome.status.replaceAll("_", " ")}</StatusPill></td>
+                  <td>{formatDateTime(outcome.completed_at)}</td>
+                  <td>{outcome.error_message || outcome.error_code?.replaceAll("_", " ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </article>
   );
 }
 

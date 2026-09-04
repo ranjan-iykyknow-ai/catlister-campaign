@@ -3,6 +3,7 @@
 import asyncio
 import os
 from dataclasses import dataclass
+from email.utils import parseaddr
 
 import httpx
 from pydantic import TypeAdapter
@@ -52,17 +53,18 @@ def provider_settings(*, validate: bool = True) -> ProviderSettings:
     api_key = os.getenv("RESEND_API_KEY")
     from_address = os.getenv("RESEND_FROM_EMAIL", DEFAULT_FROM_ADDRESS)
     demo_recipient = os.getenv("RESEND_DEMO_RECIPIENT")
+    sender_email = parseaddr(from_address)[1].strip().casefold()
+    uses_shared_sender = sender_email == "onboarding@resend.dev"
     if validate and not api_key:
         raise AppError(503, "sender_configuration", "Set RESEND_API_KEY on the server.")
     if validate:
-        raw_email = from_address.rsplit("<", 1)[-1].rstrip("> ")
         try:
-            TypeAdapter(ContactCreate).validate_python({"first_name": "Sender", "email": raw_email})
+            TypeAdapter(ContactCreate).validate_python({"first_name": "Sender", "email": sender_email})
         except ValueError:
             raise AppError(
                 503, "sender_configuration", "RESEND_FROM_EMAIL must contain a valid email address."
             ) from None
-        if raw_email.casefold() == "onboarding@resend.dev" and not demo_recipient:
+        if uses_shared_sender and not demo_recipient:
             raise AppError(
                 503,
                 "sender_configuration",
@@ -73,7 +75,9 @@ def provider_settings(*, validate: bool = True) -> ProviderSettings:
         from_address=from_address,
         rate=rate,
         api_key=api_key,
-        demo_recipient=demo_recipient.casefold() if demo_recipient else None,
+        # The recipient allowlist exists only for Resend's shared test sender.
+        # A verified custom domain may deliver to any valid campaign contact.
+        demo_recipient=demo_recipient.strip().casefold() if uses_shared_sender and demo_recipient else None,
     )
 
 
@@ -90,7 +94,12 @@ class ResendSender:
         message: str,
         settings: ProviderSettings,
     ) -> str:
-        if settings.demo_recipient and email.casefold() != settings.demo_recipient:
+        sender_email = parseaddr(settings.from_address or "")[1].strip().casefold()
+        if (
+            sender_email == "onboarding@resend.dev"
+            and settings.demo_recipient
+            and email.casefold() != settings.demo_recipient
+        ):
             raise CampaignSendError(
                 "The shared onboarding@resend.dev sender can only deliver to the configured Resend account email."
             )

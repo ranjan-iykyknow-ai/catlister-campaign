@@ -209,7 +209,7 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
       ) : null}
 
       {campaign.provider === "resend" ? (
-        <div className="provider-banner"><strong>Live Resend mode</strong><span>The shared onboarding sender can reach only your Resend account email until you verify a domain.</span></div>
+        <div className="provider-banner"><strong>Live Resend mode</strong><span>Emails use the configured Resend sender. Review every eligible contact before sending.</span></div>
       ) : (
         <div className="provider-banner"><strong>Safe preview mode</strong><span>Messages are simulated; no real email leaves the app.</span></div>
       )}

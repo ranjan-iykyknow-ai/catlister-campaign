@@ -1,49 +1,112 @@
-# Campaign Dispatcher
+# Catlister Campaign Dispatcher
 
-A small full-stack campaign manager for creating campaigns, importing contacts, personalizing message templates, and tracking email outcomes. The React UI, FastAPI API, SQLite data, and Resend integration are delivered as one deployable service.
+A focused full-stack campaign manager for creating campaigns, managing contacts and reusable templates, sending personalized email, and reviewing delivery history. The React UI, FastAPI API, SQLite database, and Resend integration ship as one Docker image.
 
-## What it supports
+## Live demo
 
-- Campaign create, read, update, and delete
-- Contact CRUD with a hard limit of 10 contacts per campaign
-- Atomic CSV import using `first_name,email` headers
-- Reusable message-template CRUD and campaign assignment
-- `{first_name}` personalization in both subject and message
-- Explicit opt-out handling: opted-out contacts never reach the sender
-- FastAPI background dispatch at one email per second
-- Fake sender for safe tests and Resend for live delivery
-- Persistent aggregate and per-contact delivery results
-- Optional shared-password protection for a public demo
+The application is deployed at [catlister-campaign-demo.up.railway.app](https://catlister-campaign-demo.up.railway.app/).
+
+The demo is protected by a shared reviewer password. Credentials are distributed separately and are intentionally not committed to the repository.
+
+## Product capabilities
+
+- Create, view, edit, and delete campaigns.
+- Add, edit, opt out, and delete contacts, with a deliberate limit of 10 per campaign.
+- Import contacts atomically from a UTF-8 CSV file with `first_name,email` headers.
+- Create, edit, reuse, and delete message templates.
+- Personalize subjects and messages with `{first_name}` and see a live preview.
+- Send asynchronously through Resend at a configurable rate (one email per second by default).
+- Safely simulate delivery with the fake provider during development and tests.
+- Preserve immutable send snapshots and per-recipient outcomes for every run.
+- Show the newest delivery summary first and expand any run for recipient-level details.
+- Protect a public demo with an optional shared password.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser[React + TypeScript UI] -->|same-origin JSON API| API[FastAPI]
+    API --> Service[Campaign service]
+    Service --> DB[(SQLite via SQLAlchemy)]
+    Service -->|BackgroundTasks| Dispatch[Rate-limited dispatcher]
+    Dispatch --> Fake[Fake sender]
+    Dispatch --> Resend[Resend API]
+    Resend --> Inbox[Recipient inboxes]
+```
+
+The frontend and API are served from one origin in production. Controllers handle HTTP concerns, Pydantic models define API contracts, and the service layer owns transactions, orchestration, and send-state transitions. The schema and starter data live in `database/schema.sql`.
+
+### Send lifecycle
+
+1. The API validates that the campaign has contacts and a selected template.
+2. It snapshots the template and every recipient into a new run, then returns `202 Accepted`.
+3. A FastAPI background task claims eligible outcomes sequentially and applies the configured rate.
+4. Opted-out contacts are skipped immediately; provider results are recorded per recipient.
+5. The run finishes as completed, completed with errors, failed, or interrupted.
+
+Resend acceptance means the provider accepted the request; it does not guarantee inbox placement. Interrupted or ambiguous submissions are never retried automatically, which avoids accidental duplicate email.
+
+## Technology
+
+- React 19, TypeScript, Vite, and TanStack Query
+- FastAPI, Pydantic, SQLAlchemy, and HTTPX
+- SQLite with explicit foreign keys and transactional writes
+- Resend HTTP API
+- Pytest, Ruff, Vitest, and TypeScript checks
+- Multi-stage Docker build and Railway hosting
 
 ## Run locally
 
-Requires Python 3.12, [uv](https://docs.astral.sh/uv/), and Node.js 22.
+Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22, and npm.
 
 ```bash
+cp .env.example .env
 make setup
 make db-reset
 make dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
+Open [localhost:5173](http://localhost:5173/). FastAPI documentation is available at [localhost:8000/docs](http://localhost:8000/docs).
 
-Copy `.env.example` to `.env` for local configuration. If `RESEND_API_KEY` exists and `EMAIL_PROVIDER` is omitted, the backend selects Resend automatically. Set `EMAIL_PROVIDER=fake` whenever you want to guarantee that no real email is sent.
+`make db-reset` replaces the local development database with the starter schema. Do not use it against a database containing data you want to keep.
 
-## Resend demo mode
+## Email configuration
 
-The no-domain demo uses:
+### Safe local mode
 
-```text
-RESEND_API_KEY=re_...
-EMAIL_PROVIDER=resend
-RESEND_FROM_EMAIL=Campaign Dispatcher <onboarding@resend.dev>
-RESEND_DEMO_RECIPIENT=the-email-on-your-resend-account@example.com
+No real message leaves the application:
+
+```env
+EMAIL_PROVIDER=fake
 SEND_RATE_PER_SECOND=1
 ```
 
-`onboarding@resend.dev` can send only to the email address associated with the Resend account. Set `RESEND_DEMO_RECIPIENT` to that exact address so the application rejects other recipients before calling Resend. Reaching unrelated inboxes requires a verified sending domain.
+### Resend with a verified domain
 
-The API key stays server-side. It is ignored by Git, excluded from the Docker build context, and never returned to the frontend.
+The deployed demo uses the verified `mail.ranjan.ai` domain:
+
+```env
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_your_server_side_key
+RESEND_FROM_EMAIL=Catlister <campaigns@mail.ranjan.ai>
+SEND_RATE_PER_SECOND=1
+```
+
+Do not set `RESEND_DEMO_RECIPIENT` when using a verified domain. The API key remains server-side and is excluded from Git and the Docker build context.
+
+### Resend shared test sender
+
+For a no-domain test, use `onboarding@resend.dev` and restrict delivery to the email associated with the Resend account:
+
+```env
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_your_server_side_key
+RESEND_FROM_EMAIL=Campaign Dispatcher <onboarding@resend.dev>
+RESEND_DEMO_RECIPIENT=your-resend-account-email@example.com
+SEND_RATE_PER_SECOND=1
+```
+
+The shared sender cannot deliver to arbitrary recipients. A verified domain is required for that.
 
 ## CSV format
 
@@ -53,21 +116,21 @@ Maya,maya@example.com
 Noah,noah@example.com
 ```
 
-Imports are UTF-8, at most 64 KiB, and all-or-nothing. Duplicate emails or any row that would take the campaign above 10 contacts rejects the whole import.
+Imports are limited to 64 KiB and 10 rows. A malformed row, duplicate email, invalid address, or resulting campaign size above 10 rejects the entire import, leaving existing contacts unchanged.
 
-## API outline
+## API
 
-- `GET|POST /v1/campaigns`
-- `GET|PATCH|DELETE /v1/campaigns/{campaign_id}`
-- `GET|POST /v1/campaigns/{campaign_id}/contacts`
-- `PATCH|DELETE /v1/campaigns/{campaign_id}/contacts/{contact_id}`
-- `POST /v1/campaigns/{campaign_id}/contacts/import`
-- `POST /v1/campaigns/{campaign_id}/preview`
-- `POST /v1/campaigns/{campaign_id}/send`
-- `GET /v1/campaigns/{campaign_id}/runs/{run_id}`
-- `GET|POST /v1/templates`
-- `GET|PATCH|DELETE /v1/templates/{template_id}`
-- `GET|POST|DELETE /v1/auth/session`
+| Area | Endpoints |
+| --- | --- |
+| Authentication | `GET`, `POST`, `DELETE /v1/auth/session` |
+| Campaigns | `GET`, `POST /v1/campaigns`; `GET`, `PATCH`, `DELETE /v1/campaigns/{campaign_id}` |
+| Contacts | `GET`, `POST /v1/campaigns/{campaign_id}/contacts`; `PATCH`, `DELETE /v1/campaigns/{campaign_id}/contacts/{contact_id}` |
+| CSV import | `POST /v1/campaigns/{campaign_id}/contacts/import` |
+| Preview | `POST /v1/campaigns/{campaign_id}/preview` |
+| Send and history | `POST /v1/campaigns/{campaign_id}/send`; `GET /v1/campaigns/{campaign_id}/runs`; `GET /v1/campaigns/{campaign_id}/runs/{run_id}` |
+| Templates | `GET`, `POST /v1/templates`; `GET`, `PATCH`, `DELETE /v1/templates/{template_id}` |
+
+All errors use a consistent JSON envelope containing a machine-readable code, a user-facing message, and optional validation details.
 
 ## Verification
 
@@ -76,32 +139,57 @@ make test
 make check
 ```
 
-Backend tests cover CRUD, CSV atomicity, personalization, opt-out skipping, persisted outcomes, template protections, and shared-password access. Frontend checks cover API behavior, TypeScript, tests, and production build.
+The suite covers campaign, contact, and template CRUD; CSV atomicity; personalization; opt-out handling; persisted delivery outcomes; provider safeguards; authentication; frontend API error handling; TypeScript; and the production build.
 
-## Deploy to Railway
+## Docker
 
-Railway detects the root `Dockerfile`, builds the React application, installs the FastAPI backend, and serves both from one origin.
+```bash
+docker build -t catlister-campaign-demo .
+docker run --rm \
+  --name catlister-campaign-demo \
+  --env-file .env \
+  -e DATABASE_PATH=/data/app.db \
+  -p 8080:8000 \
+  -v catlister-data:/data \
+  catlister-campaign-demo
+```
 
-1. Push this repository to GitHub and connect it to a new Railway service.
-2. Add a Railway volume mounted at `/data`.
-3. Add these service variables:
+Open [localhost:8080](http://localhost:8080/). The named volume keeps SQLite data between container replacements.
 
-   ```text
+## Railway deployment
+
+Railway builds the root `Dockerfile` and supplies its assigned `PORT` automatically.
+
+1. Connect the GitHub repository to a Railway service.
+2. Add a persistent volume mounted at `/data`.
+3. Configure these service variables:
+
+   ```env
    DATABASE_PATH=/data/app.db
    EMAIL_PROVIDER=resend
-   RESEND_API_KEY=your-key
-   RESEND_FROM_EMAIL=Campaign Dispatcher <onboarding@resend.dev>
-   RESEND_DEMO_RECIPIENT=your-resend-account-email
+   RESEND_API_KEY=re_your_server_side_key
+   RESEND_FROM_EMAIL=Catlister <campaigns@mail.ranjan.ai>
    SEND_RATE_PER_SECOND=1
-   APP_PASSWORD=a-reviewer-password
-   SESSION_SECRET=a-long-random-value
+   APP_PASSWORD=provide-out-of-band
+   SESSION_SECRET=generate-a-long-random-value
    ```
 
-4. Deploy one replica and generate a Railway domain in the service Networking settings.
-5. Sign in with `APP_PASSWORD`, replace the seeded example contacts with the permitted live recipient, and run one reviewed demonstration.
+4. Leave `RESEND_DEMO_RECIPIENT` unset for the verified domain.
+5. Deploy one replica and generate a public domain under the service networking settings.
 
-SQLite plus in-process background work intentionally assumes one application replica. A production system would move to a managed database, a durable queue, webhooks, and stronger user authentication.
+SQLite and in-process background work intentionally assume a single application replica. A production evolution would use a managed relational database, durable job queue, provider webhooks, user accounts, bounce/suppression management, and observability.
 
-## Design notes
+## Repository layout
 
-The schema lives in `database/schema.sql`. Controllers handle HTTP concerns, Pydantic models define contracts, and the service layer owns SQL and orchestration. Each send creates immutable subject, message, and recipient snapshots before returning `202 Accepted`; the background task then records one outcome per contact. Provider success means Resend accepted the request, not guaranteed inbox delivery.
+```text
+backend/app/              FastAPI application and domain services
+backend/tests/            API and provider tests
+database/schema.sql       Schema and deterministic starter data
+frontend/src/             React UI, data hooks, and API client
+Dockerfile                Production multi-stage image
+Makefile                  Local setup, test, and verification commands
+```
+
+## Deliberate scope
+
+This is a reviewable demonstration rather than a bulk-email platform. The 10-contact cap, one-replica deployment, simple `{first_name}` replacement, shared demo authentication, and in-process dispatcher keep the implementation proportionate while preserving clear upgrade paths.

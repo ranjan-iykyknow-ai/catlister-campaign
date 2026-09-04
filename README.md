@@ -1,54 +1,107 @@
 # Campaign Dispatcher
 
-You have a small full-stack product slice to build. You may use the tools you normally use, including coding agents and google. Narrate important decisions, inspect generated code, and verify the behavior you implement.
+A small full-stack campaign manager for creating campaigns, importing contacts, personalizing message templates, and tracking email outcomes. The React UI, FastAPI API, SQLite data, and Resend integration are delivered as one deployable service.
 
-## Start here
+## What it supports
+
+- Campaign create, read, update, and delete
+- Contact CRUD with a hard limit of 10 contacts per campaign
+- Atomic CSV import using `first_name,email` headers
+- Reusable message-template CRUD and campaign assignment
+- `{first_name}` personalization in both subject and message
+- Explicit opt-out handling: opted-out contacts never reach the sender
+- FastAPI background dispatch at one email per second
+- Fake sender for safe tests and Resend for live delivery
+- Persistent aggregate and per-contact delivery results
+- Optional shared-password protection for a public demo
+
+## Run locally
 
 Requires Python 3.12, [uv](https://docs.astral.sh/uv/), and Node.js 22.
 
 ```bash
 make setup
+make db-reset
 make dev
 ```
 
-The campaign UI runs at [http://localhost:5173](http://localhost:5173), and the FastAPI docs are at [http://localhost:8000/docs](http://localhost:8000/docs).
+Open [http://localhost:5173](http://localhost:5173). API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-Useful commands:
+Copy `.env.example` to `.env` for local configuration. If `RESEND_API_KEY` exists and `EMAIL_PROVIDER` is omitted, the backend selects Resend automatically. Set `EMAIL_PROVIDER=fake` whenever you want to guarantee that no real email is sent.
 
-```bash
-make db-reset  # Recreate SQLite after changing database/schema.sql
-make test      # Run backend and frontend tests
-make check     # Lint, test, type-check, and build
+## Resend demo mode
+
+The no-domain demo uses:
+
+```text
+RESEND_API_KEY=re_...
+EMAIL_PROVIDER=resend
+RESEND_FROM_EMAIL=Campaign Dispatcher <onboarding@resend.dev>
+RESEND_DEMO_RECIPIENT=the-email-on-your-resend-account@example.com
+SEND_RATE_PER_SECOND=1
 ```
 
-## Product goal
+`onboarding@resend.dev` can send only to the email address associated with the Resend account. Set `RESEND_DEMO_RECIPIENT` to that exact address so the application rejects other recipients before calling Resend. Reaching unrelated inboxes requires a verified sending domain.
 
-> Allow a user to send the displayed campaign to its contacts and see what happened.
+The API key stays server-side. It is ignored by Git, excluded from the Docker build context, and never returned to the frontend.
 
-Implement an end-to-end slice that:
+## CSV format
 
-1. Designs the SQLite tables needed for the campaign, its contacts, and delivery outcomes. Table names and columns are your decision.
-2. Inserts the campaign and contacts shown in `database/schema.sql`.
-3. Reads the campaign and contacts from SQLite when sending.
-4. Replaces `{first_name}` in the message template for each eligible contact.
-5. Never calls the sender for opted-out contacts.
-6. Persists sent and skipped outcomes.
-7. Exposes the behavior through an API contract you design.
-8. Connects the existing React screen to the API and displays aggregate and per-contact outcomes.
-9. Adds focused backend tests for the behavior you consider most important.
+```csv
+first_name,email
+Maya,maya@example.com
+Noah,noah@example.com
+```
 
-Prefer the simplest coherent design you can explain. You do not need migrations, authentication, retries, idempotency, background jobs, or polished styling.
+Imports are UTF-8, at most 64 KiB, and all-or-nothing. Duplicate emails or any row that would take the campaign above 10 contacts rejects the whole import.
 
-## Where to work
+## API outline
 
-The repository is already wired so you can focus on the product behavior:
+- `GET|POST /v1/campaigns`
+- `GET|PATCH|DELETE /v1/campaigns/{campaign_id}`
+- `GET|POST /v1/campaigns/{campaign_id}/contacts`
+- `PATCH|DELETE /v1/campaigns/{campaign_id}/contacts/{contact_id}`
+- `POST /v1/campaigns/{campaign_id}/contacts/import`
+- `POST /v1/campaigns/{campaign_id}/preview`
+- `POST /v1/campaigns/{campaign_id}/send`
+- `GET /v1/campaigns/{campaign_id}/runs/{run_id}`
+- `GET|POST /v1/templates`
+- `GET|PATCH|DELETE /v1/templates/{template_id}`
+- `GET|POST|DELETE /v1/auth/session`
 
-- `database/schema.sql` — define your schema and insert the starter data. This is the only database setup file you need to touch.
-- `backend/app/v1/campaigns/model.py` — define Pydantic contracts.
-- `backend/app/v1/campaigns/controller.py` — add the route.
-- `backend/app/v1/campaigns/service.py` — implement SQL and orchestration.
-- `frontend/src/types/api.ts` — define the response shape.
-- `frontend/src/lib/api.ts` and `frontend/src/lib/data/use-campaign.ts` — call the API.
-- `frontend/src/pages/campaign-detail.tsx` — render the result.
+## Verification
 
-The fake sender in `backend/app/v1/campaigns/sender.py` is complete and records its calls for tests.
+```bash
+make test
+make check
+```
+
+Backend tests cover CRUD, CSV atomicity, personalization, opt-out skipping, persisted outcomes, template protections, and shared-password access. Frontend checks cover API behavior, TypeScript, tests, and production build.
+
+## Deploy to Railway
+
+Railway detects the root `Dockerfile`, builds the React application, installs the FastAPI backend, and serves both from one origin.
+
+1. Push this repository to GitHub and connect it to a new Railway service.
+2. Add a Railway volume mounted at `/data`.
+3. Add these service variables:
+
+   ```text
+   DATABASE_PATH=/data/app.db
+   EMAIL_PROVIDER=resend
+   RESEND_API_KEY=your-key
+   RESEND_FROM_EMAIL=Campaign Dispatcher <onboarding@resend.dev>
+   RESEND_DEMO_RECIPIENT=your-resend-account-email
+   SEND_RATE_PER_SECOND=1
+   APP_PASSWORD=a-reviewer-password
+   SESSION_SECRET=a-long-random-value
+   ```
+
+4. Deploy one replica and generate a Railway domain in the service Networking settings.
+5. Sign in with `APP_PASSWORD`, replace the seeded example contacts with the permitted live recipient, and run one reviewed demonstration.
+
+SQLite plus in-process background work intentionally assumes one application replica. A production system would move to a managed database, a durable queue, webhooks, and stronger user authentication.
+
+## Design notes
+
+The schema lives in `database/schema.sql`. Controllers handle HTTP concerns, Pydantic models define contracts, and the service layer owns SQL and orchestration. Each send creates immutable subject, message, and recipient snapshots before returning `202 Accepted`; the background task then records one outcome per contact. Provider success means Resend accepted the request, not guaranteed inbox delivery.

@@ -112,9 +112,14 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
   const campaignQuery = useCampaign(campaignId);
   const templates = useTemplates();
   const actions = useCampaignActions();
+  const templateActions = useTemplateActions();
   const campaign = campaignQuery.data;
+  const [showCampaignEdit, setShowCampaignEdit] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [templateSubject, setTemplateSubject] = useState("");
+  const [templateBody, setTemplateBody] = useState("");
   const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -125,6 +130,18 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
       setDescription(campaign.description ?? "");
     }
   }, [campaign?.id]);
+
+  useEffect(() => {
+    if (campaign?.template) {
+      setTemplateName(campaign.template.name);
+      setTemplateSubject(campaign.template.subject);
+      setTemplateBody(campaign.template.body);
+    } else {
+      setTemplateName("");
+      setTemplateSubject("");
+      setTemplateBody("");
+    }
+  }, [campaign?.template?.id, campaign?.template?.updated_at]);
 
   if (campaignQuery.isLoading || !campaign) {
     return <main className="app-shell"><BrandHeader /><p className="empty-state">Loading campaign…</p><InlineError error={campaignQuery.error} /></main>;
@@ -159,18 +176,35 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
       <button className="back-link" onClick={onBack} type="button">← All campaigns</button>
       <header className="page-header">
         <div><p className="eyebrow">Campaign</p><h1>{campaign.name}</h1><p className="page-subtitle">{campaign.description || "Add a description to give this campaign context."}</p></div>
-        <Button
-          className="send-button"
-          disabled={!campaign.template || campaign.eligible_count === 0 || campaign.active_run}
-          loading={actions.sendCampaign.isPending || campaign.active_run}
-          loadingLabel="Sending…"
-          onClick={() => {
-            const target = campaign.provider === "resend" ? "real email through Resend" : "simulated email";
-            if (window.confirm(`Send ${target} to ${campaign.eligible_count} eligible contact(s)?`)) actions.sendCampaign.mutate(campaignId);
-          }}
-          type="button"
-        >Send campaign</Button>
+        <div className="header-actions">
+          <button className="secondary-button" onClick={() => setShowCampaignEdit(true)} type="button">Edit campaign</button>
+          <Button
+            className="send-button"
+            disabled={!campaign.template || campaign.eligible_count === 0 || campaign.active_run}
+            loading={actions.sendCampaign.isPending || campaign.active_run}
+            loadingLabel="Sending…"
+            onClick={() => {
+              const target = campaign.provider === "resend" ? "real email through Resend" : "simulated email";
+              if (window.confirm(`Send ${target} to ${campaign.eligible_count} eligible contact(s)?`)) actions.sendCampaign.mutate(campaignId);
+            }}
+            type="button"
+          >Send campaign</Button>
+        </div>
       </header>
+
+      {showCampaignEdit ? (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setShowCampaignEdit(false); }}>
+          <section aria-labelledby="edit-campaign-heading" aria-modal="true" className="modal-card" role="dialog">
+            <div className="panel-heading"><h2 id="edit-campaign-heading">Edit campaign details</h2><button aria-label="Close campaign editor" className="icon-button" onClick={() => setShowCampaignEdit(false)} type="button">Close</button></div>
+            <form className="form-grid" onSubmit={async (event) => { event.preventDefault(); await actions.updateCampaign.mutateAsync({ id: campaignId, input: { name, description: description || null } }); setShowCampaignEdit(false); }}>
+              <label>Name<input autoFocus required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label>
+              <label>Description<textarea maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+              <InlineError error={actions.updateCampaign.error} />
+              <div className="form-actions"><Button loading={actions.updateCampaign.isPending} loadingLabel="Saving…" type="submit">Save campaign</Button><button className="text-button danger-text" onClick={removeCampaign} type="button">Delete campaign</button></div>
+            </form>
+          </section>
+        </div>
+      ) : null}
 
       {campaign.provider === "resend" ? (
         <div className="provider-banner"><strong>Live Resend mode</strong><span>The shared onboarding sender can reach only your Resend account email until you verify a domain.</span></div>
@@ -180,25 +214,31 @@ function CampaignDetailPage({ campaignId, onBack, onTemplates }: { campaignId: s
       <InlineError error={actions.sendCampaign.error} />
 
       <div className="detail-grid">
-        <section className="panel" aria-labelledby="setup-heading">
-          <div className="panel-heading"><h2 id="setup-heading">Campaign setup</h2></div>
-          <form className="form-grid" onSubmit={async (event) => { event.preventDefault(); await actions.updateCampaign.mutateAsync({ id: campaignId, input: { name, description: description || null } }); }}>
-            <label>Name<input required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
-            <label>Description<textarea maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-            <label>Message template
-              <select value={campaign.template_id ?? ""} onChange={(e) => actions.updateCampaign.mutate({ id: campaignId, input: { template_id: e.target.value || null } })}>
+        <section className="panel template-workbench" aria-labelledby="template-editor-heading">
+          <div className="panel-heading"><div><h2 id="template-editor-heading">Message template</h2><small>Edit the selected template without leaving the campaign.</small></div><button className="text-button" onClick={onTemplates} type="button">Manage all</button></div>
+          <div className="template-picker">
+            <label>Selected template
+              <select value={campaign.template_id ?? ""} onChange={(event) => actions.updateCampaign.mutate({ id: campaignId, input: { template_id: event.target.value || null } })}>
                 <option value="">Select a template</option>
                 {templates.data?.items.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
               </select>
             </label>
-            <InlineError error={actions.updateCampaign.error} />
-            <div className="form-actions"><Button loading={actions.updateCampaign.isPending} loadingLabel="Saving…" type="submit">Save changes</Button><button className="text-button danger-text" onClick={removeCampaign} type="button">Delete campaign</button></div>
-          </form>
+          </div>
+          {campaign.template ? (
+            <form className="form-grid template-editor-form" onSubmit={async (event) => { event.preventDefault(); await templateActions.updateTemplate.mutateAsync({ id: campaign.template!.id, input: { name: templateName, subject: templateSubject, body: templateBody } }); }}>
+              <label>Template name<input required maxLength={100} value={templateName} onChange={(event) => setTemplateName(event.target.value)} /></label>
+              <label>Subject<input required maxLength={200} value={templateSubject} onChange={(event) => setTemplateSubject(event.target.value)} /></label>
+              <label>Message<textarea className="message-input" required maxLength={10000} value={templateBody} onChange={(event) => setTemplateBody(event.target.value)} /></label>
+              <p className="field-hint">Use {"{first_name}"} to personalize the subject or message.</p>
+              <InlineError error={templateActions.updateTemplate.error || actions.updateCampaign.error} />
+              <Button loading={templateActions.updateTemplate.isPending} loadingLabel="Saving template…" type="submit">Save template</Button>
+            </form>
+          ) : <div className="empty-state compact">Choose an existing template or manage templates to create a new one.</div>}
         </section>
 
         <section className="panel message-panel" aria-labelledby="message-heading">
           <div className="panel-heading"><h2 id="message-heading">Personalized preview</h2><span className="contact-count">{sample ? `For ${sample.first_name}` : "Example"}</span></div>
-          {campaign.template ? <div className="message-preview"><strong>{render(campaign.template.subject)}</strong><p>{render(campaign.template.body)}</p></div> : <div className="empty-state compact">Choose a template to preview the message.</div>}
+          {campaign.template ? <div className="message-preview"><strong>{render(templateSubject)}</strong><p>{render(templateBody)}</p></div> : <div className="empty-state compact">Choose a template to preview the message.</div>}
         </section>
       </div>
 

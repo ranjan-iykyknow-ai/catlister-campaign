@@ -143,18 +143,29 @@ The suite covers campaign, contact, and template CRUD; CSV atomicity; personaliz
 
 ## Docker
 
+The Makefile provides the complete local Docker workflow. Start the application in the background with:
+
 ```bash
-docker build -t catlister-campaign-demo .
-docker run --rm \
-  --name catlister-campaign-demo \
-  --env-file .env \
-  -e DATABASE_PATH=/data/app.db \
-  -p 8080:8000 \
-  -v catlister-data:/data \
-  catlister-campaign-demo
+cp .env.example .env
+make docker-up
 ```
 
-Open [localhost:8080](http://localhost:8080/). The named volume keeps SQLite data between container replacements.
+Open [localhost:8080](http://localhost:8080/), then use:
+
+```bash
+make docker-logs  # Follow application logs
+make docker-down  # Stop and remove the container
+```
+
+For a foreground process, run `make docker-run` instead. It builds the image first and removes the container automatically when stopped. `make docker-build` only builds the production image.
+
+The named `catlister-campaign-data` volume keeps SQLite data between container replacements. The defaults can be overridden when necessary:
+
+```bash
+make docker-up DOCKER_PORT=8090 DOCKER_CONTAINER=catlister-review
+```
+
+The copied `.env.example` uses the fake provider, so this workflow does not send real email unless the reviewer explicitly configures Resend.
 
 ## Railway deployment
 

@@ -62,6 +62,12 @@ def provider_settings(*, validate: bool = True) -> ProviderSettings:
             raise AppError(
                 503, "sender_configuration", "RESEND_FROM_EMAIL must contain a valid email address."
             ) from None
+        if raw_email.casefold() == "onboarding@resend.dev" and not demo_recipient:
+            raise AppError(
+                503,
+                "sender_configuration",
+                "Set RESEND_DEMO_RECIPIENT to the email address on your Resend account.",
+            )
     return ProviderSettings(
         provider="resend",
         from_address=from_address,

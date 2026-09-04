@@ -97,3 +97,4 @@ export type SendCampaignResponse = {
   provider: Provider;
   status_url: string;
 };
+export type AuthSession = { required: boolean; authenticated: boolean };
